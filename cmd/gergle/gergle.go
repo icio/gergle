@@ -41,6 +41,7 @@ func main() {
 	var quiet bool
 	var verbose bool
 	var numWorkers uint16
+	var numConns int
 
 	cmd := &cobra.Command{
 		Use:   "gergle URL",
@@ -51,6 +52,7 @@ func main() {
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "No logging to stderr.")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output logging.")
 	cmd.Flags().Uint16VarP(&numWorkers, "workers", "w", 10, "Number of concurrent http-getting workers.")
+	cmd.Flags().IntVarP(&numConns, "connections", "c", 5, "Maximum number of open connections to the server.")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Configure logging.
@@ -79,9 +81,13 @@ func main() {
 			return errors.New("Expected URL of the form http[s]://...")
 		}
 
+		client := &http.Client{Transport: &http.Transport{
+			MaxIdleConnsPerHost: numConns,
+		}}
+
 		// Crawling.
 		pages := make(chan Page, 10)
-		go crawl(initUrl, pages, maxDepth, parseDisallowRules(disallow), numWorkers)
+		go crawl(client, initUrl, pages, maxDepth, parseDisallowRules(disallow), numWorkers)
 
 		// Output.
 		for page := range pages {
@@ -107,7 +113,7 @@ func sanitizeURL(u *url.URL) string {
 	return strings.TrimRight(us, "/")
 }
 
-func crawl(initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regexp.Regexp, numWorkers uint16) {
+func crawl(client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regexp.Regexp, numWorkers uint16) {
 	unexplored := sync.WaitGroup{}
 	logger.Info("Starting crawl", "url", initUrl)
 
@@ -171,7 +177,7 @@ func crawl(initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regex
 		go func() {
 			for task := range pending {
 				// <-ticker
-				page := process(task)
+				page := process(client, task)
 				out <- page
 
 				for _, link := range page.Links {
@@ -223,8 +229,8 @@ func parseDisallowRules(rules []string) (regexpRules []*regexp.Regexp) {
 	return
 }
 
-func process(task Task) Page {
-	resp, err := http.Get(task.URL.String())
+func process(client *http.Client, task Task) Page {
+	resp, err := client.Get(task.URL.String())
 	if err != nil {
 		return ErrorPage(task.URL, task.Depth, err)
 	}
