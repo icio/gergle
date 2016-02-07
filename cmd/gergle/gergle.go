@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -15,7 +17,7 @@ type Page struct {
 	URL       string
 	Processed bool
 	Depth     int
-	Links     []Link
+	Links     []*Link
 	Error     *error
 }
 
@@ -30,6 +32,9 @@ type Task struct {
 	Depth int
 }
 
+// Attribution: definitely not http://stackoverflow.com/a/1732454/123600.
+var anchorRegex = regexp.MustCompile("(?is)<a[^>]+href=\"?(.+?)[\"\\s>]")
+
 func main() {
 	if len(os.Args) < 2 {
 		panic("Usage: gergle URL")
@@ -40,7 +45,7 @@ func main() {
 	go crawl(url, pages)
 
 	for page := range pages {
-		fmt.Printf("%#v\n", page)
+		fmt.Printf("URL: %s, Depth: %d, Links: %d\n", page.URL, page.Depth, len(page.Links))
 	}
 }
 
@@ -52,26 +57,50 @@ func crawl(url string, out chan<- Page) {
 	pending <- URLTask(url)
 	tasks.Add(1)
 
+	links := make(chan *Link, 100)
+	go func() {
+		seen := make(map[string]bool)
+		for link := range links {
+			if link.External {
+				fmt.Printf("Skipping external link: %#v\n", link)
+				// tasks.Done()
+				continue
+			}
+
+			_, linkSeen := seen[link.URL]
+			if linkSeen {
+				fmt.Print("Skipping seen link: %#v\n", link)
+				// tasks.Done()
+				continue
+			}
+
+			fmt.Printf("Queueing unseen link: %#v\n", link)
+
+			// Queue the link.
+			seen[link.URL] = true
+			pending <- LinkTask(link)
+		}
+	}()
+
 	// Request pending, and requeue discovered pages.
 	go func() {
 		for task := range pending {
-			page := process(task)
-			out <- page
+			go func() {
+				page := process(task)
+				out <- page
 
-			if page.Error == nil {
 				for _, link := range page.Links {
-					if !link.External {
-						// TODO: Don't requeue duplicates.
-						pending <- LinkTask(link)
-						tasks.Add(1)
-					}
+					fmt.Println("Adding link %#v", link)
+					tasks.Add(1)
+					links <- link
 				}
-			}
-			tasks.Done()
+				// tasks.Done()
+			}()
 		}
 	}()
 
 	tasks.Wait()
+	close(links)
 	close(out)
 }
 
@@ -79,12 +108,26 @@ func URLTask(url string) Task {
 	return Task{URL: url, Depth: 0}
 }
 
-func LinkTask(link Link) Task {
+func LinkTask(link *Link) Task {
 	return Task{URL: link.URL, Depth: link.Depth}
 }
 
 func ErrorPage(url string, depth int, err error) Page {
-	return Page{url, false, depth, []Link{}, &err}
+	return Page{url, false, depth, []*Link{}, &err}
+}
+
+func FollowLink(href string, base *url.URL, depth int) (*Link, error) {
+	hrefUrl, err := url.Parse(href)
+	if err != nil {
+		return nil, err
+	}
+
+	abs := base.ResolveReference(hrefUrl)
+	return &Link{
+		URL:      abs.String(),
+		External: abs.Scheme != base.Scheme || abs.Host != base.Host,
+		Depth:    depth,
+	}, nil
 }
 
 func process(task Task) Page {
@@ -113,14 +156,31 @@ func parsePage(url string, depth int, resp *http.Response) Page {
 	}
 
 	base := parseBase(resp, body)
-	return Page{url, true, depth, parseLinks(base, body), nil}
+	return Page{url, true, depth, parseLinks(base, body, depth+1), nil}
 }
 
 func parseBase(resp *http.Response, body []byte) *url.URL {
 	return resp.Request.URL // TODO: Look for <base /> tags.
 }
 
-func parseLinks(base *url.URL, body []byte) []Link {
-	fmt.Printf("%s\n", body)
-	return []Link{}
+func parseLinks(base *url.URL, body []byte, depth int) (links []*Link) {
+
+	n := bytes.IndexByte(body, 0)
+	for _, anchor := range anchorRegex.FindAllSubmatch(body, n) {
+		// fmt.Printf("anchor: %s\n", anchor[1])
+		// fmt.Printf("anchor: %s\n", string(anchor[1]))
+		// n := bytes.IndexByte(anchor[1], 0)
+		// fmt.Printf("n: %d\n", n)
+		// href := string(anchor[1][:n])
+		// fmt.Printf("href: %s\n", href)
+
+		link, err := FollowLink(string(anchor[1]), base, depth)
+		if err != nil {
+			fmt.Println(err)
+			continue // TODO: Log that we couldn't parse the link.
+		}
+		links = append(links, link)
+	}
+
+	return
 }
