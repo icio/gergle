@@ -137,7 +137,7 @@ func crawl(initUrl *url.URL, out chan<- Page) {
 	}(initUrl)
 
 	// Request pending, and requeue discovered pages.
-	for w := 0; w < 4; w++ {
+	for w := 0; w < 10; w++ {
 		go func() {
 			for task := range pending {
 				// <-ticker
