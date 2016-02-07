@@ -40,6 +40,7 @@ func main() {
 	var disallow []string
 	var quiet bool
 	var verbose bool
+	var numWorkers uint16
 
 	cmd := &cobra.Command{
 		Use:   "gergle URL",
@@ -49,6 +50,7 @@ func main() {
 	cmd.Flags().StringSliceVarP(&disallow, "disallow", "i", nil, "Disallowed paths.")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "No logging to stderr.")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output logging.")
+	cmd.Flags().Uint16VarP(&numWorkers, "workers", "w", 10, "Number of concurrent http-getting workers.")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Configure logging.
@@ -79,7 +81,7 @@ func main() {
 
 		// Crawling.
 		pages := make(chan Page, 10)
-		go crawl(initUrl, pages, maxDepth, parseDisallowRules(disallow))
+		go crawl(initUrl, pages, maxDepth, parseDisallowRules(disallow), numWorkers)
 
 		// Output.
 		for page := range pages {
@@ -105,7 +107,7 @@ func sanitizeURL(u *url.URL) string {
 	return strings.TrimRight(us, "/")
 }
 
-func crawl(initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regexp.Regexp) {
+func crawl(initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regexp.Regexp, numWorkers uint16) {
 	unexplored := sync.WaitGroup{}
 	logger.Info("Starting crawl", "url", initUrl)
 
@@ -165,7 +167,7 @@ func crawl(initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regex
 	}(initUrl)
 
 	// Request pending, and requeue discovered pages.
-	for w := 0; w < 10; w++ {
+	for w := uint16(0); w < numWorkers; w++ {
 		go func() {
 			for task := range pending {
 				// <-ticker
