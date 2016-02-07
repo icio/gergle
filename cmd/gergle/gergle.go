@@ -198,8 +198,19 @@ func parsePage(url *url.URL, depth int, resp *http.Response) Page {
 	return Page{url, true, depth, parseLinks(base, body, depth+1), nil}
 }
 
+var baseRegex = regexp.MustCompile("(?is)<base[^>]+href=[\"']?(.+?)['\"\\s>]")
+
 func parseBase(resp *http.Response, body []byte) *url.URL {
-	return resp.Request.URL // TODO: Look for <base /> tags.
+	base := baseRegex.FindSubmatch(body)
+	if base != nil {
+		baseUrl, err := url.Parse(string(base[1]))
+		if err == nil {
+			// Use the <base href="..."> from the page body.
+			return resp.Request.URL.ResolveReference(baseUrl)
+		}
+	}
+
+	return resp.Request.URL
 }
 
 // Attribution: definitely not http://stackoverflow.com/a/1732454/123600.
