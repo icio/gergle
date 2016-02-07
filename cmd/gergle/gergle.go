@@ -214,7 +214,7 @@ func parseBase(resp *http.Response, body []byte) *url.URL {
 }
 
 // Attribution: definitely not http://stackoverflow.com/a/1732454/123600.
-var anchorRegex = regexp.MustCompile("(?is)<a[^>]+href=\"?(.+?)[\"\\s>]")
+var anchorRegex = regexp.MustCompile("(?is)<a[^>]+href=[\"']?(.+?)['\"\\s>]")
 
 func parseLinks(base *url.URL, body []byte, depth int) (links []*Link) {
 	n := bytes.IndexByte(body, 0)
