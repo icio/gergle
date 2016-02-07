@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/spf13/cobra"
 	log "gopkg.in/inconshreveable/log15.v2"
 	"io/ioutil"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -17,7 +17,7 @@ import (
 type Page struct {
 	URL       *url.URL
 	Processed bool
-	Depth     int
+	Depth     uint16
 	Links     []*Link
 	Error     *error
 }
@@ -25,38 +25,71 @@ type Page struct {
 type Link struct {
 	URL      *url.URL
 	External bool
-	Depth    int
+	Depth    uint16
 }
 
 type Task struct {
 	URL   *url.URL
-	Depth int
+	Depth uint16
 }
 
 var logger = log.New()
 
 func main() {
-	logger.SetHandler(log.StderrHandler)
+	var maxDepth uint16
+	var disallow []string
+	var quiet bool
+	var verbose bool
 
-	if len(os.Args) < 2 {
-		panic("Usage: gergle URL")
+	cmd := &cobra.Command{
+		Use:   "gergle URL",
+		Short: "Website crawler.",
+	}
+	cmd.Flags().Uint16VarP(&maxDepth, "depth", "d", 100, "Maximum crawl depth.")
+	cmd.Flags().StringSliceVarP(&disallow, "disallow", "i", nil, "Disallowed paths.")
+	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "No logging to stderr.")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output logging.")
+
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		// Configure logging.
+		var logLevel log.Lvl
+		if verbose && quiet {
+			return errors.New("--verbose and --quiet are mutually exclusive options.")
+		} else if verbose {
+			logLevel = log.LvlDebug
+		} else if quiet {
+			logLevel = log.LvlCrit
+		} else {
+			logLevel = log.LvlInfo
+		}
+		logger.SetHandler(log.LvlFilterHandler(logLevel, log.StderrHandler))
+
+		// Ensure the user provides only a single URL.
+		if len(args) < 1 {
+			return errors.New("URL argument required.")
+		} else if len(args) > 1 {
+			return errors.New("Unexpected arguments after URL.")
+		}
+
+		// Ensure the user has provided a valid URL.
+		initUrl, err := url.Parse(args[0])
+		if err != nil || (initUrl.Scheme != "http" && initUrl.Scheme != "https") {
+			return errors.New("Expected URL of the form http[s]://...")
+		}
+
+		// Crawling.
+		pages := make(chan Page, 10)
+		go crawl(initUrl, pages, maxDepth, parseDisallowRules(disallow))
+
+		// Output.
+		for page := range pages {
+			fmt.Printf("URL: %s, Depth: %d, Links: %d\n", page.URL, page.Depth, len(page.Links))
+		}
+
+		return nil
 	}
 
-	url, err := url.Parse(os.Args[1])
-	if err != nil {
-		panic("Invalid URL")
-	}
-
-	if url.Scheme != "http" && url.Scheme != "https" {
-		panic("Only http/https URLs are supported.")
-	}
-
-	pages := make(chan Page, 10)
-	go crawl(url, pages)
-
-	for page := range pages {
-		fmt.Printf("URL: %s, Depth: %d, Links: %d\n", page.URL, page.Depth, len(page.Links))
-	}
+	cmd.Execute()
 }
 
 func sanitizeURL(u *url.URL) string {
@@ -72,12 +105,7 @@ func sanitizeURL(u *url.URL) string {
 	return strings.TrimRight(us, "/")
 }
 
-func crawl(initUrl *url.URL, out chan<- Page) {
-	maxDepth := 1
-	disallow := []*regexp.Regexp{
-		regexp.MustCompile(strings.Replace(regexp.QuoteMeta("/react/*"), "\\*", "*", -1)),
-	}
-
+func crawl(initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regexp.Regexp) {
 	unexplored := sync.WaitGroup{}
 	logger.Info("Starting crawl", "url", initUrl)
 
@@ -163,11 +191,11 @@ func LinkTask(link *Link) Task {
 	return Task{URL: link.URL, Depth: link.Depth}
 }
 
-func ErrorPage(pageURL *url.URL, depth int, err error) Page {
+func ErrorPage(pageURL *url.URL, depth uint16, err error) Page {
 	return Page{pageURL, false, depth, []*Link{}, &err}
 }
 
-func FollowLink(href string, base *url.URL, depth int) (*Link, error) {
+func FollowLink(href string, base *url.URL, depth uint16) (*Link, error) {
 	hrefUrl, err := url.Parse(href)
 	if err != nil {
 		return nil, err
@@ -181,6 +209,18 @@ func FollowLink(href string, base *url.URL, depth int) (*Link, error) {
 	}, nil
 }
 
+func parseDisallowRule(rule string) *regexp.Regexp {
+	return regexp.MustCompile("^/?" + strings.Replace(regexp.QuoteMeta(strings.TrimLeft(rule, "/")), "\\*", "*", -1))
+}
+
+func parseDisallowRules(rules []string) (regexpRules []*regexp.Regexp) {
+	regexpRules = make([]*regexp.Regexp, 0)
+	for _, rule := range rules {
+		regexpRules = append(regexpRules, parseDisallowRule(rule))
+	}
+	return
+}
+
 func process(task Task) Page {
 	resp, err := http.Get(task.URL.String())
 	if err != nil {
@@ -191,15 +231,15 @@ func process(task Task) Page {
 	return parsePage(task.URL, task.Depth, resp)
 }
 
-func parsePage(pageUrl *url.URL, depth int, resp *http.Response) Page {
+func parsePage(pageUrl *url.URL, depth uint16, resp *http.Response) Page {
 	if resp.StatusCode != 200 {
-		logger.Debug("Non-200 response", "url", pageUrl)
+		logger.Debug("Not processing non-200 status code", "url", pageUrl, "status", resp.StatusCode)
 		return ErrorPage(pageUrl, depth, errors.New("Non-200 response"))
 	}
 
 	mime := resp.Header.Get("Content-Type")
 	if !strings.Contains(strings.ToLower(mime), "html") {
-		logger.Debug("Doesn't look like HTML")
+		logger.Debug("Doesn't look like HTML", "url", pageUrl, "content-type", mime)
 		return ErrorPage(pageUrl, depth, errors.New("Doesn't look like HTML"))
 	}
 
@@ -231,7 +271,7 @@ func parseBase(resp *http.Response, body []byte) *url.URL {
 // Attribution: definitely not http://stackoverflow.com/a/1732454/123600.
 var anchorRegex = regexp.MustCompile("(?is)<a[^>]+href=[\"']?(.+?)['\"\\s>]")
 
-func parseLinks(base *url.URL, body []byte, depth int) (links []*Link) {
+func parseLinks(base *url.URL, body []byte, depth uint16) (links []*Link) {
 	n := bytes.IndexByte(body, 0)
 	for _, anchor := range anchorRegex.FindAllSubmatch(body, n) {
 		link, err := FollowLink(string(anchor[1]), base, depth)
