@@ -49,57 +49,73 @@ func main() {
 	}
 }
 
+func sanitizeURL(url string) string {
+	// Remove the fragment
+	f := strings.Index(url, "#")
+	if f != -1 {
+		url = url[:f]
+	}
+
+	// Remove trailing slashes
+	return strings.TrimRight(url, "/")
+}
+
 func crawl(url string, out chan<- Page) {
-	tasks := sync.WaitGroup{}
+	unexplored := sync.WaitGroup{}
 
 	// Prepare the work queue.
 	pending := make(chan Task, 100)
 	pending <- URLTask(url)
-	tasks.Add(1)
+	unexplored.Add(1)
 
 	links := make(chan *Link, 100)
-	go func() {
+	go func(init ...string) {
 		seen := make(map[string]bool)
+
+		// Mark the URLs queued elsewhere as being seen.
+		for _, initUrl := range init {
+			seen[sanitizeURL(initUrl)] = true
+		}
+
 		for link := range links {
 			if link.External {
-				fmt.Printf("Skipping external link: %#v\n", link)
-				// tasks.Done()
+				// fmt.Printf("- Skipping external link: %#v\n", link)
+				unexplored.Done()
 				continue
 			}
 
-			_, linkSeen := seen[link.URL]
+			sanUrl := sanitizeURL(link.URL)
+			_, linkSeen := seen[sanUrl]
 			if linkSeen {
-				fmt.Print("Skipping seen link: %#v\n", link)
-				// tasks.Done()
+				// fmt.Printf("- Skipping seen link: %#v\n", link)
+				unexplored.Done()
 				continue
 			}
-
-			fmt.Printf("Queueing unseen link: %#v\n", link)
 
 			// Queue the link.
-			seen[link.URL] = true
+			seen[sanUrl] = true
 			pending <- LinkTask(link)
 		}
-	}()
+	}(url)
 
 	// Request pending, and requeue discovered pages.
-	go func() {
-		for task := range pending {
-			go func() {
+	for w := 0; w < 4; w++ {
+		go func() {
+			for task := range pending {
 				page := process(task)
 				out <- page
 
 				for _, link := range page.Links {
-					fmt.Println("Adding link %#v", link)
-					tasks.Add(1)
+					// fmt.Printf("  Found link %#v\n", link)
+					unexplored.Add(1)
 					links <- link
 				}
-				// tasks.Done()
-			}()
-		}
-	}()
+				unexplored.Done()
+			}
+		}()
+	}
 
-	tasks.Wait()
+	unexplored.Wait()
 	close(links)
 	close(out)
 }
@@ -164,19 +180,10 @@ func parseBase(resp *http.Response, body []byte) *url.URL {
 }
 
 func parseLinks(base *url.URL, body []byte, depth int) (links []*Link) {
-
 	n := bytes.IndexByte(body, 0)
 	for _, anchor := range anchorRegex.FindAllSubmatch(body, n) {
-		// fmt.Printf("anchor: %s\n", anchor[1])
-		// fmt.Printf("anchor: %s\n", string(anchor[1]))
-		// n := bytes.IndexByte(anchor[1], 0)
-		// fmt.Printf("n: %d\n", n)
-		// href := string(anchor[1][:n])
-		// fmt.Printf("href: %s\n", href)
-
 		link, err := FollowLink(string(anchor[1]), base, depth)
 		if err != nil {
-			fmt.Println(err)
 			continue // TODO: Log that we couldn't parse the link.
 		}
 		links = append(links, link)
