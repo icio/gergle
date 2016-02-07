@@ -32,9 +32,6 @@ type Task struct {
 	Depth int
 }
 
-// Attribution: definitely not http://stackoverflow.com/a/1732454/123600.
-var anchorRegex = regexp.MustCompile("(?is)<a[^>]+href=\"?(.+?)[\"\\s>]")
-
 func main() {
 	if len(os.Args) < 2 {
 		panic("Usage: gergle URL")
@@ -178,6 +175,9 @@ func parsePage(url string, depth int, resp *http.Response) Page {
 func parseBase(resp *http.Response, body []byte) *url.URL {
 	return resp.Request.URL // TODO: Look for <base /> tags.
 }
+
+// Attribution: definitely not http://stackoverflow.com/a/1732454/123600.
+var anchorRegex = regexp.MustCompile("(?is)<a[^>]+href=\"?(.+?)[\"\\s>]")
 
 func parseLinks(base *url.URL, body []byte, depth int) (links []*Link) {
 	n := bytes.IndexByte(body, 0)
