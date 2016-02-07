@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	log "gopkg.in/inconshreveable/log15.v2"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -32,7 +33,11 @@ type Task struct {
 	Depth int
 }
 
+var logger = log.New()
+
 func main() {
+	logger.SetHandler(log.StderrHandler)
+
 	if len(os.Args) < 2 {
 		panic("Usage: gergle URL")
 	}
@@ -74,6 +79,7 @@ func crawl(initUrl *url.URL, out chan<- Page) {
 	}
 
 	unexplored := sync.WaitGroup{}
+	logger.Info("Starting crawl", "url", initUrl)
 
 	// Prepare the work queue.
 	pending := make(chan Task, 100)
@@ -81,12 +87,18 @@ func crawl(initUrl *url.URL, out chan<- Page) {
 	unexplored.Add(1)
 
 	follow := func(link *Link) bool {
-		if link.External || link.Depth > maxDepth {
+		if link.External {
+			logger.Debug("Skipping external link", "url", link.URL)
+			return false
+		}
+		if link.Depth > maxDepth {
+			logger.Debug("Skipping deep link", "url", link.URL, "depth", link.Depth, "maxDepth", maxDepth)
 			return false
 		}
 
 		for _, disallowRule := range disallow {
 			if disallowRule.MatchString(link.URL.Path) {
+				logger.Debug("Skipping disallowed link", "url", link.URL, "rule", disallowRule)
 				return false
 			}
 		}
@@ -179,23 +191,26 @@ func process(task Task) Page {
 	return parsePage(task.URL, task.Depth, resp)
 }
 
-func parsePage(url *url.URL, depth int, resp *http.Response) Page {
+func parsePage(pageUrl *url.URL, depth int, resp *http.Response) Page {
 	if resp.StatusCode != 200 {
-		return ErrorPage(url, depth, errors.New("Non-200 response"))
+		logger.Debug("Non-200 response", "url", pageUrl)
+		return ErrorPage(pageUrl, depth, errors.New("Non-200 response"))
 	}
 
 	mime := resp.Header.Get("Content-Type")
 	if !strings.Contains(strings.ToLower(mime), "html") {
-		return ErrorPage(url, depth, errors.New("Doesn't look like HTML"))
+		logger.Debug("Doesn't look like HTML")
+		return ErrorPage(pageUrl, depth, errors.New("Doesn't look like HTML"))
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return ErrorPage(url, depth, err)
+		logger.Warn("Failed to read body", "url", pageUrl)
+		return ErrorPage(pageUrl, depth, err)
 	}
 
 	base := parseBase(resp, body)
-	return Page{url, true, depth, parseLinks(base, body, depth+1), nil}
+	return Page{pageUrl, true, depth, parseLinks(base, body, depth+1), nil}
 }
 
 var baseRegex = regexp.MustCompile("(?is)<base[^>]+href=[\"']?(.+?)['\"\\s>]")
@@ -221,7 +236,8 @@ func parseLinks(base *url.URL, body []byte, depth int) (links []*Link) {
 	for _, anchor := range anchorRegex.FindAllSubmatch(body, n) {
 		link, err := FollowLink(string(anchor[1]), base, depth)
 		if err != nil {
-			continue // TODO: Log that we couldn't parse the link.
+			logger.Debug("Failed to parse href", "href", anchor[1])
+			continue
 		}
 		links = append(links, link)
 	}
