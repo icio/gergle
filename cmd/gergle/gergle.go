@@ -14,7 +14,7 @@ import (
 )
 
 type Page struct {
-	URL       string
+	URL       *url.URL
 	Processed bool
 	Depth     int
 	Links     []*Link
@@ -22,13 +22,13 @@ type Page struct {
 }
 
 type Link struct {
-	URL      string
+	URL      *url.URL
 	External bool
 	Depth    int
 }
 
 type Task struct {
-	URL   string
+	URL   *url.URL
 	Depth int
 }
 
@@ -36,7 +36,15 @@ func main() {
 	if len(os.Args) < 2 {
 		panic("Usage: gergle URL")
 	}
-	url := os.Args[1]
+
+	url, err := url.Parse(os.Args[1])
+	if err != nil {
+		panic("Invalid URL")
+	}
+
+	if url.Scheme != "http" && url.Scheme != "https" {
+		panic("Only http/https URLs are supported.")
+	}
 
 	pages := make(chan Page, 10)
 	go crawl(url, pages)
@@ -46,27 +54,48 @@ func main() {
 	}
 }
 
-func sanitizeURL(url string) string {
+func sanitizeURL(u *url.URL) string {
+	us := u.String()
+
 	// Remove the fragment
-	f := strings.Index(url, "#")
+	f := strings.Index(us, "#")
 	if f != -1 {
-		url = url[:f]
+		us = us[:f]
 	}
 
 	// Remove trailing slashes
-	return strings.TrimRight(url, "/")
+	return strings.TrimRight(us, "/")
 }
 
-func crawl(url string, out chan<- Page) {
+func crawl(initUrl *url.URL, out chan<- Page) {
+	maxDepth := 1
+	disallow := []*regexp.Regexp{
+		regexp.MustCompile(strings.Replace(regexp.QuoteMeta("/react/*"), "\\*", "*", -1)),
+	}
+
 	unexplored := sync.WaitGroup{}
 
 	// Prepare the work queue.
 	pending := make(chan Task, 100)
-	pending <- URLTask(url)
+	pending <- Task{initUrl, 0}
 	unexplored.Add(1)
 
+	follow := func(link *Link) bool {
+		if link.External || link.Depth > maxDepth {
+			return false
+		}
+
+		for _, disallowRule := range disallow {
+			if disallowRule.MatchString(link.URL.Path) {
+				return false
+			}
+		}
+
+		return true
+	}
+
 	links := make(chan *Link, 100)
-	go func(init ...string) {
+	go func(init ...*url.URL) {
 		seen := make(map[string]bool)
 
 		// Mark the URLs queued elsewhere as being seen.
@@ -75,7 +104,7 @@ func crawl(url string, out chan<- Page) {
 		}
 
 		for link := range links {
-			if link.External {
+			if !follow(link) {
 				// fmt.Printf("- Skipping external link: %#v\n", link)
 				unexplored.Done()
 				continue
@@ -93,12 +122,13 @@ func crawl(url string, out chan<- Page) {
 			seen[sanUrl] = true
 			pending <- LinkTask(link)
 		}
-	}(url)
+	}(initUrl)
 
 	// Request pending, and requeue discovered pages.
 	for w := 0; w < 4; w++ {
 		go func() {
 			for task := range pending {
+				// <-ticker
 				page := process(task)
 				out <- page
 
@@ -117,16 +147,12 @@ func crawl(url string, out chan<- Page) {
 	close(out)
 }
 
-func URLTask(url string) Task {
-	return Task{URL: url, Depth: 0}
-}
-
 func LinkTask(link *Link) Task {
 	return Task{URL: link.URL, Depth: link.Depth}
 }
 
-func ErrorPage(url string, depth int, err error) Page {
-	return Page{url, false, depth, []*Link{}, &err}
+func ErrorPage(pageURL *url.URL, depth int, err error) Page {
+	return Page{pageURL, false, depth, []*Link{}, &err}
 }
 
 func FollowLink(href string, base *url.URL, depth int) (*Link, error) {
@@ -137,14 +163,14 @@ func FollowLink(href string, base *url.URL, depth int) (*Link, error) {
 
 	abs := base.ResolveReference(hrefUrl)
 	return &Link{
-		URL:      abs.String(),
+		URL:      abs,
 		External: abs.Scheme != base.Scheme || abs.Host != base.Host,
 		Depth:    depth,
 	}, nil
 }
 
 func process(task Task) Page {
-	resp, err := http.Get(task.URL)
+	resp, err := http.Get(task.URL.String())
 	if err != nil {
 		return ErrorPage(task.URL, task.Depth, err)
 	}
@@ -153,7 +179,7 @@ func process(task Task) Page {
 	return parsePage(task.URL, task.Depth, resp)
 }
 
-func parsePage(url string, depth int, resp *http.Response) Page {
+func parsePage(url *url.URL, depth int, resp *http.Response) Page {
 	if resp.StatusCode != 200 {
 		return ErrorPage(url, depth, errors.New("Non-200 response"))
 	}
