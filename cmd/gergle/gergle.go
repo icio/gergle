@@ -31,7 +31,7 @@ func main() {
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "No logging to stderr.")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output logging.")
 	cmd.Flags().IntVarP(&numConns, "connections", "c", 5, "Maximum number of open connections to the server.")
-	cmd.Flags().BoolVarP(&zeroBothers, "zero", "", false, "The number of bothers given about robots.txt. ")
+	cmd.Flags().BoolVarP(&zeroBothers, "zero", "", false, "The number of bothers to give about robots.txt. ")
 	cmd.Flags().Float64VarP(&delay, "delay", "t", -1, "The number of seconds between requests to the server.")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
