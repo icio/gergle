@@ -24,6 +24,7 @@ Flags:
   -t, --delay float       The number of seconds between requests to the server. (default -1)
   -d, --depth value       Maximum crawl depth. (default 100)
   -i, --disallow value    Disallowed paths. (default [])
+      --long              List all of the links and assets from a page.
   -q, --quiet             No logging to stderr.
   -v, --verbose           Verbose output logging.
       --zero              The number of bothers to give about robots.txt.
@@ -33,8 +34,9 @@ Flags:
 ## Examples
 
 ``` bash
-# Crawl paul-scott.com with one second between each page request.
-$ gergle http://www.paul-scott.com/ -t 1
+# Crawl paul-scott.com with one second between each page request,
+# listing all links and assets.
+$ gergle http://www.paul-scott.com/ -t 1 --long
 
 # Crawl kirupa.com, excluding /forum*, up to three levels deep (first page is
 # depth 0), ignoring robots.txt and using up to 30 simultaneous connections.
@@ -46,7 +48,5 @@ $ gergle -q https://www.kirupa.com/ --zero -c 30 -d 3 -iforum
 ## Todo
 
 - [ ] Actual tests -- something beyond [manual testing](https://github.com/icio/crawler-target) :disappointed:
-- [ ] Extraction and display of assets
-- [ ] Display of links per page
 - [ ] First-class tracking of redirects and canonical URLs
 - [ ] Vendoring of dependencies
