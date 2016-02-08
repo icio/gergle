@@ -90,7 +90,7 @@ func main() {
 
 		// Output.
 		for page := range pages {
-			fmt.Printf("URL: %s, Depth: %d, Links: %d\n", page.URL, page.Depth, len(page.Links))
+			fmt.Printf("URL: %s, Depth: %d, Links: %d, Assets: %d\n", page.URL, page.Depth, len(page.Links), len(page.Assets))
 		}
 
 		return nil
@@ -140,22 +140,29 @@ type Page struct {
 	Processed bool
 	Depth     uint16
 	Links     []*Link
+	Assets    []*Link
 	Error     *error
 }
 
 func ErrorPage(pageURL *url.URL, depth uint16, err error) Page {
-	return Page{pageURL, false, depth, []*Link{}, &err}
+	return Page{pageURL, false, depth, []*Link{}, []*Link{}, &err}
 }
 
 // A link on a page to another resource.
 type Link struct {
+	Type     string
 	URL      *url.URL
 	External bool
 	Depth    uint16
 }
 
-// FollowLink returns a Link object from an <a> href, according to the base URL.
-func FollowLink(href string, base *url.URL, depth uint16) (*Link, error) {
+// AnchorLink returns a Link object from an <a> href, according to the base URL.
+func AnchorLink(href string, base *url.URL, depth uint16) (*Link, error) {
+	return AssetLink("anchor", href, base, depth)
+}
+
+// AssetLink returns a Link object describing a Page's dependency on another resource.
+func AssetLink(assetType string, href string, base *url.URL, depth uint16) (*Link, error) {
 	hrefUrl, err := url.Parse(href)
 	if err != nil {
 		return nil, err
@@ -163,6 +170,7 @@ func FollowLink(href string, base *url.URL, depth uint16) (*Link, error) {
 
 	abs := base.ResolveReference(hrefUrl)
 	return &Link{
+		Type:     assetType,
 		URL:      abs,
 		External: abs.Scheme != base.Scheme || abs.Host != base.Host,
 		Depth:    depth,

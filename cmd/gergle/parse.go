@@ -1,5 +1,7 @@
 package main
 
+// TODO: Investigate some of the libraries for properly parsing and finding tags.
+
 import (
 	"bytes"
 	"errors"
@@ -72,7 +74,14 @@ func parsePage(pageUrl *url.URL, depth uint16, resp *http.Response) Page {
 	}
 
 	base := parseBase(resp, body)
-	return Page{pageUrl, true, depth, parseLinks(base, body, depth+1), nil}
+	return Page{
+		URL:       pageUrl,
+		Processed: true,
+		Depth:     depth,
+		Links:     parseLinks(base, body, depth+1),
+		Assets:    parseAssets(base, body, depth+1),
+		Error:     nil,
+	}
 }
 
 var baseRegex = regexp.MustCompile("(?is)<base[^>]+href=[\"']?(.+?)['\"\\s>]")
@@ -98,12 +107,29 @@ var anchorRegex = regexp.MustCompile("(?is)<a[^>]+href=[\"']?(.+?)['\"\\s>]")
 func parseLinks(base *url.URL, body []byte, depth uint16) (links []*Link) {
 	n := bytes.IndexByte(body, 0)
 	for _, anchor := range anchorRegex.FindAllSubmatch(body, n) {
-		link, err := FollowLink(string(anchor[1]), base, depth)
+		link, err := AnchorLink(string(anchor[1]), base, depth)
 		if err != nil {
 			logger.Debug("Failed to parse href", "href", anchor[1])
 			continue
 		}
 		links = append(links, link)
+	}
+
+	return
+}
+
+var assetRegex = regexp.MustCompile("(?is)<(script|img|embed|audio|video|iframe)[^>]+src=[\"']?(.+?)['\"\\s>]")
+
+func parseAssets(base *url.URL, body []byte, depth uint16) (assets []*Link) {
+	// TODO: Consider <link>, <object> tags.
+	n := bytes.IndexByte(body, 0)
+	for _, assetTag := range assetRegex.FindAllSubmatch(body, n) {
+		asset, err := AssetLink(string(assetTag[1]), string(assetTag[2]), base, depth)
+		if err != nil {
+			logger.Debug("Failed to parse asset source", "src", assetTag[2])
+			continue
+		}
+		assets = append(assets, asset)
 	}
 
 	return
