@@ -30,11 +30,11 @@ func sanitizeURL(u *url.URL) string {
 // more testable chunks. But later, when it's not 1am.
 func crawl(
 	client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint16,
-	disallow []*regexp.Regexp, numWorkers uint16, delay time.Duration,
+	disallow []*regexp.Regexp, delay time.Duration,
 ) {
 	logger.Info(
 		"Starting crawl", "url", initUrl, "delay", delay, "maxDepth",
-		maxDepth, "disallow", disallow, "workers", numWorkers,
+		maxDepth, "disallow", disallow,
 	)
 
 	var ticker *time.Ticker

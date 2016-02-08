@@ -18,7 +18,6 @@ func main() {
 	var disallow []string
 	var quiet bool
 	var verbose bool
-	var numWorkers uint16
 	var numConns int
 	var zeroBothers bool
 	var delay float64
@@ -31,7 +30,6 @@ func main() {
 	cmd.Flags().StringSliceVarP(&disallow, "disallow", "i", nil, "Disallowed paths.")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "No logging to stderr.")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output logging.")
-	cmd.Flags().Uint16VarP(&numWorkers, "workers", "w", 10, "Number of concurrent http-getting workers.")
 	cmd.Flags().IntVarP(&numConns, "connections", "c", 5, "Maximum number of open connections to the server.")
 	cmd.Flags().BoolVarP(&zeroBothers, "zero", "", false, "The number of bothers given about robots.txt. ")
 	cmd.Flags().Float64VarP(&delay, "delay", "t", -1, "The number of seconds between requests to the server.")
@@ -88,7 +86,7 @@ func main() {
 
 		// Crawling.
 		pages := make(chan Page, 10)
-		go crawl(client, initUrl, pages, maxDepth, parseDisallowRules(disallow), numWorkers, delayDuration)
+		go crawl(client, initUrl, pages, maxDepth, parseDisallowRules(disallow), delayDuration)
 
 		// Output.
 		for page := range pages {
