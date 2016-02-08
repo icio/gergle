@@ -104,9 +104,10 @@ func crawl(
 	}(initUrl)
 
 	// Request pending, and requeue discovered pages.
-	for w := uint16(0); w < numWorkers; w++ {
-		go func() {
-			for task := range pending {
+	go func() {
+		for task := range pending {
+			go func(task Task) {
+				logger.Debug("Starting", "url", task.URL)
 				if ticker != nil {
 					<-ticker.C
 				}
@@ -117,8 +118,8 @@ func crawl(
 					page = ErrorPage(task.URL, task.Depth, err)
 				} else {
 					page = parsePage(task.URL, task.Depth, resp)
+					resp.Body.Close()
 				}
-				resp.Body.Close()
 				out <- page
 
 				for _, link := range page.Links {
@@ -126,9 +127,9 @@ func crawl(
 					links <- link
 				}
 				unexplored.Done()
-			}
-		}()
-	}
+			}(task)
+		}
+	}()
 
 	// Tie eveything off so that we exit clearly.
 	unexplored.Wait()
