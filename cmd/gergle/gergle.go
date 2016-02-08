@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Page struct {
@@ -43,6 +44,7 @@ func main() {
 	var numWorkers uint16
 	var numConns int
 	var zeroBothers bool
+	var delay float64
 
 	cmd := &cobra.Command{
 		Use:   "gergle URL",
@@ -54,7 +56,8 @@ func main() {
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output logging.")
 	cmd.Flags().Uint16VarP(&numWorkers, "workers", "w", 10, "Number of concurrent http-getting workers.")
 	cmd.Flags().IntVarP(&numConns, "connections", "c", 5, "Maximum number of open connections to the server.")
-	cmd.Flags().BoolVarP(&zeroBothers, "zero", "z", false, "The number of bothers given about robots.txt. ")
+	cmd.Flags().BoolVarP(&zeroBothers, "zero", "", false, "The number of bothers given about robots.txt. ")
+	cmd.Flags().Float64VarP(&delay, "delay", "t", 0, "The number of seconds between requests to the server.")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Configure logging.
@@ -98,7 +101,7 @@ func main() {
 
 		// Crawling.
 		pages := make(chan Page, 10)
-		go crawl(client, initUrl, pages, maxDepth, parseDisallowRules(disallow), numWorkers)
+		go crawl(client, initUrl, pages, maxDepth, parseDisallowRules(disallow), numWorkers, time.Duration(delay*1e9))
 
 		// Output.
 		for page := range pages {
@@ -153,9 +156,14 @@ func sanitizeURL(u *url.URL) string {
 	return strings.TrimRight(us, "/")
 }
 
-func crawl(client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regexp.Regexp, numWorkers uint16) {
+func crawl(client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regexp.Regexp, numWorkers uint16, delay time.Duration) {
 	unexplored := sync.WaitGroup{}
-	logger.Info("Starting crawl", "url", initUrl, "maxDepth", maxDepth, "disallow", disallow, "workers", numWorkers)
+	logger.Info("Starting crawl", "url", initUrl, "delay", delay, "maxDepth", maxDepth, "disallow", disallow, "workers", numWorkers)
+
+	var ticker <-chan time.Time
+	if delay > 0 {
+		ticker = time.Tick(delay)
+	}
 
 	// Prepare the work queue.
 	pending := make(chan Task, 100)
@@ -216,7 +224,9 @@ func crawl(client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint
 	for w := uint16(0); w < numWorkers; w++ {
 		go func() {
 			for task := range pending {
-				// <-ticker
+				if ticker != nil {
+					<-ticker
+				}
 				page := process(client, task)
 				out <- page
 
