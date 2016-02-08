@@ -21,6 +21,7 @@ func main() {
 	var numConns int
 	var zeroBothers bool
 	var delay float64
+	var longOutput bool
 
 	cmd := &cobra.Command{
 		Use:   "gergle URL",
@@ -33,6 +34,7 @@ func main() {
 	cmd.Flags().IntVarP(&numConns, "connections", "c", 5, "Maximum number of open connections to the server.")
 	cmd.Flags().BoolVarP(&zeroBothers, "zero", "", false, "The number of bothers to give about robots.txt. ")
 	cmd.Flags().Float64VarP(&delay, "delay", "t", -1, "The number of seconds between requests to the server.")
+	cmd.Flags().BoolVarP(&longOutput, "long", "", false, "List all of the links and assets from a page.")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Configure logging.
@@ -91,6 +93,14 @@ func main() {
 		// Output.
 		for page := range pages {
 			fmt.Printf("URL: %s, Depth: %d, Links: %d, Assets: %d\n", page.URL, page.Depth, len(page.Links), len(page.Assets))
+			if longOutput {
+				for _, link := range page.Links {
+					fmt.Printf("- %s: %s\n", link.Type, link.URL)
+				}
+				for _, link := range page.Assets {
+					fmt.Printf("- %s: %s\n", link.Type, link.URL)
+				}
+			}
 		}
 
 		return nil
