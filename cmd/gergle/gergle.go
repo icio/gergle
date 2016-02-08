@@ -42,6 +42,7 @@ func main() {
 	var verbose bool
 	var numWorkers uint16
 	var numConns int
+	var zeroBothers bool
 
 	cmd := &cobra.Command{
 		Use:   "gergle URL",
@@ -53,6 +54,7 @@ func main() {
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output logging.")
 	cmd.Flags().Uint16VarP(&numWorkers, "workers", "w", 10, "Number of concurrent http-getting workers.")
 	cmd.Flags().IntVarP(&numConns, "connections", "c", 5, "Maximum number of open connections to the server.")
+	cmd.Flags().BoolVarP(&zeroBothers, "zero", "z", false, "The number of bothers given about robots.txt. ")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Configure logging.
@@ -85,6 +87,15 @@ func main() {
 			MaxIdleConnsPerHost: numConns,
 		}}
 
+		if !zeroBothers {
+			robots, err := fetchRobots(client, initUrl)
+			if err == nil {
+				disallow = append(disallow, readDisallowRules(robots)...)
+			} else {
+				logger.Info("Failed to fetch robots.txt", "error", err)
+			}
+		}
+
 		// Crawling.
 		pages := make(chan Page, 10)
 		go crawl(client, initUrl, pages, maxDepth, parseDisallowRules(disallow), numWorkers)
@@ -98,6 +109,35 @@ func main() {
 	}
 
 	cmd.Execute()
+}
+
+func fetchRobots(client *http.Client, u *url.URL) ([]byte, error) {
+	robotsPath, _ := url.Parse("/robots.txt")
+	robotsUrl := u.ResolveReference(robotsPath).String()
+	logger.Info("Fetching robots.txt", "url", robotsUrl)
+	resp, err := client.Get(robotsUrl)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != 200 {
+		return nil, errors.New("robots.txt not found.")
+	}
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+var robotsTxtDisallowRules = regexp.MustCompile("(?is)Disallow:\\s*(.+?)(\\s|$)")
+
+func readDisallowRules(body []byte) (rules []string) {
+	n := bytes.IndexByte(body, 0)
+	for _, rule := range robotsTxtDisallowRules.FindAllSubmatch(body, n) {
+		rules = append(rules, string(rule[1]))
+	}
+	return
 }
 
 func sanitizeURL(u *url.URL) string {
@@ -115,7 +155,7 @@ func sanitizeURL(u *url.URL) string {
 
 func crawl(client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regexp.Regexp, numWorkers uint16) {
 	unexplored := sync.WaitGroup{}
-	logger.Info("Starting crawl", "url", initUrl)
+	logger.Info("Starting crawl", "url", initUrl, "maxDepth", maxDepth, "disallow", disallow, "workers", numWorkers)
 
 	// Prepare the work queue.
 	pending := make(chan Task, 100)
