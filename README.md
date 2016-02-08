@@ -41,3 +41,12 @@ $ gergle http://www.paul-scott.com/ -t 1
 # 640 pages in 9 seconds on my local.
 $ gergle -q https://www.kirupa.com/ --zero -c 30 -d 3 -iforum
 ```
+
+
+## Todo
+
+- [ ] Actual tests -- something beyond [manual testing](https://github.com/icio/crawler-target) :disappointed:
+- [ ] Extraction and display of assets
+- [ ] Display of links per page
+- [ ] First-class tracking of redirects and canonical URLs
+- [ ] Vendoring of dependencies
