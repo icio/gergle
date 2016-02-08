@@ -16,25 +16,6 @@ import (
 	"time"
 )
 
-type Page struct {
-	URL       *url.URL
-	Processed bool
-	Depth     uint16
-	Links     []*Link
-	Error     *error
-}
-
-type Link struct {
-	URL      *url.URL
-	External bool
-	Depth    uint16
-}
-
-type Task struct {
-	URL   *url.URL
-	Depth uint16
-}
-
 var logger = log.New()
 
 func main() {
@@ -87,11 +68,13 @@ func main() {
 			return errors.New("Expected URL of the form http[s]://...")
 		}
 
+		// Prepare the HTTP Client with a series of connections.
 		client := &http.Client{Transport: &http.Transport{
 			MaxIdleConnsPerHost: numConns,
 		}}
 
 		if !zeroBothers {
+			// Be a good citizen: fetch the target's preferred defaults.
 			robots, err := fetchRobots(client, initUrl)
 			if err == nil {
 				disallow = append(disallow, readDisallowRules(robots)...)
@@ -104,7 +87,7 @@ func main() {
 		}
 
 		delayDuration := time.Duration(0)
-		if delay >= 0 {
+		if delay > 0 {
 			delayDuration = time.Duration(delay * 1e9)
 		}
 
@@ -123,30 +106,36 @@ func main() {
 	cmd.Execute()
 }
 
+// fetchRobots gets the body of robots.txt pertaining to the given URL.
 func fetchRobots(client *http.Client, u *url.URL) ([]byte, error) {
 	robotsPath, _ := url.Parse("/robots.txt")
 	robotsUrl := u.ResolveReference(robotsPath).String()
 	logger.Info("Fetching robots.txt", "url", robotsUrl)
+
 	resp, err := client.Get(robotsUrl)
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != 200 {
-		return nil, errors.New("robots.txt not found.")
-	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, errors.New(fmt.Sprintf("robots.txt not found (%d)", resp.StatusCode))
+	}
+
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
+
 	return body, nil
 }
 
-var robotsTxtDisallowRules = regexp.MustCompile("(?is)Disallow:\\s*(.+?)(\\s|$)")
+var robotsTxtDisallowRegex = regexp.MustCompile("(?is)Disallow:\\s*(.+?)(\\s|$)")
 
+// readDisallowRules extracts all of the Disallow directives from a robots.txt body.
 func readDisallowRules(body []byte) (rules []string) {
 	n := bytes.IndexByte(body, 0)
-	for _, rule := range robotsTxtDisallowRules.FindAllSubmatch(body, n) {
+	for _, rule := range robotsTxtDisallowRegex.FindAllSubmatch(body, n) {
 		rules = append(rules, string(rule[1]))
 	}
 	return
@@ -154,6 +143,7 @@ func readDisallowRules(body []byte) (rules []string) {
 
 var crawlDelayRegex = regexp.MustCompile("(?si)\\s*Crawl-Delay:\\s*([\\d\\.]+)")
 
+// readCrawlDelay parses the first Crawl-Delay directive from a robots.txt body.
 func readCrawlDelay(body []byte) float64 {
 	delayMatch := crawlDelayRegex.FindSubmatch(body)
 	if delayMatch == nil {
@@ -166,33 +156,49 @@ func readCrawlDelay(body []byte) float64 {
 	return delay
 }
 
+// sanitizeURL returns a stripped-down string representation of a URL designed
+// to maximise overlap of equivalent URLs with slight variations.
 func sanitizeURL(u *url.URL) string {
 	us := u.String()
 
-	// Remove the fragment
+	// Remove the fragment.
 	f := strings.Index(us, "#")
 	if f != -1 {
 		us = us[:f]
 	}
 
-	// Remove trailing slashes
+	// Remove trailing slashes.
 	return strings.TrimRight(us, "/")
 }
 
-func crawl(client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint16, disallow []*regexp.Regexp, numWorkers uint16, delay time.Duration) {
-	unexplored := sync.WaitGroup{}
-	logger.Info("Starting crawl", "url", initUrl, "delay", delay, "maxDepth", maxDepth, "disallow", disallow, "workers", numWorkers)
+// crawl is the website-crawling loop. It fetches URLs, discovers more, and
+// fetches those too, until there are no unseen pages to fetch. This is a
+// behemoth of a function which really ought to be broken down into smaller,
+// more testable chunks. But later, when it's not 1am.
+func crawl(
+	client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint16,
+	disallow []*regexp.Regexp, numWorkers uint16, delay time.Duration,
+) {
+	logger.Info(
+		"Starting crawl", "url", initUrl, "delay", delay, "maxDepth",
+		maxDepth, "disallow", disallow, "workers", numWorkers,
+	)
 
-	var ticker <-chan time.Time
+	var ticker *time.Ticker
 	if delay > 0 {
-		ticker = time.Tick(delay)
+		ticker = time.NewTicker(delay)
 	}
 
-	// Prepare the work queue.
-	pending := make(chan Task, 100)
-	pending <- Task{initUrl, 0}
+	unexplored := sync.WaitGroup{}
 	unexplored.Add(1)
 
+	// Seed the work queue.
+	pending := make(chan Task, 100)
+	pending <- Task{initUrl, 0}
+
+	// follow returns whether a link should be requeued for further processing,
+	// according to the depth of the page traversal, whether it's a link to
+	// another site, or whether the link is to a disallowed page.
 	follow := func(link *Link) bool {
 		if link.External {
 			logger.Debug("Skipping external link", "url", link.URL)
@@ -214,17 +220,19 @@ func crawl(client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint
 	}
 
 	links := make(chan *Link, 100)
+
+	// Filter the links channel onto the pending channel.
 	go func(init ...*url.URL) {
 		seen := make(map[string]bool)
 
-		// Mark the URLs queued elsewhere as being seen.
+		// Mark the URLs queued elsewhere as having been seen.
 		for _, initUrl := range init {
 			seen[sanitizeURL(initUrl)] = true
 		}
 
+		// Forward links to the pending queue if we're interested in following.
 		for link := range links {
 			if !follow(link) {
-				// fmt.Printf("- Skipping external link: %#v\n", link)
 				unexplored.Done()
 				continue
 			}
@@ -232,7 +240,6 @@ func crawl(client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint
 			sanUrl := sanitizeURL(link.URL)
 			_, linkSeen := seen[sanUrl]
 			if linkSeen {
-				// fmt.Printf("- Skipping seen link: %#v\n", link)
 				unexplored.Done()
 				continue
 			}
@@ -248,13 +255,20 @@ func crawl(client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint
 		go func() {
 			for task := range pending {
 				if ticker != nil {
-					<-ticker
+					<-ticker.C
 				}
-				page := process(client, task)
+
+				resp, err := client.Get(task.URL.String())
+				var page Page
+				if err != nil {
+					page = ErrorPage(task.URL, task.Depth, err)
+				} else {
+					page = parsePage(task.URL, task.Depth, resp)
+				}
+				resp.Body.Close()
 				out <- page
 
 				for _, link := range page.Links {
-					// fmt.Printf("  Found link %#v\n", link)
 					unexplored.Add(1)
 					links <- link
 				}
@@ -263,19 +277,47 @@ func crawl(client *http.Client, initUrl *url.URL, out chan<- Page, maxDepth uint
 		}()
 	}
 
+	// Tie eveything off so that we exit clearly.
 	unexplored.Wait()
+	if ticker != nil {
+		ticker.Stop()
+	}
 	close(links)
 	close(out)
 }
 
+// A pending Task for crawl workers to complete.
+type Task struct {
+	URL   *url.URL
+	Depth uint16
+}
+
+// The Task for following a Link.
 func LinkTask(link *Link) Task {
 	return Task{URL: link.URL, Depth: link.Depth}
+}
+
+// A Page the crawler has scraped and parsed.
+type Page struct {
+	URL       *url.URL
+	Processed bool
+	Depth     uint16
+	Links     []*Link
+	Error     *error
 }
 
 func ErrorPage(pageURL *url.URL, depth uint16, err error) Page {
 	return Page{pageURL, false, depth, []*Link{}, &err}
 }
 
+// A link on a page to another resource.
+type Link struct {
+	URL      *url.URL
+	External bool
+	Depth    uint16
+}
+
+// FollowLink returns a Link object from an <a> href, according to the base URL.
 func FollowLink(href string, base *url.URL, depth uint16) (*Link, error) {
 	hrefUrl, err := url.Parse(href)
 	if err != nil {
@@ -290,10 +332,12 @@ func FollowLink(href string, base *url.URL, depth uint16) (*Link, error) {
 	}, nil
 }
 
+// parseDisallowRule transforms a Disallow rule pattern into a regexp.Regexp
 func parseDisallowRule(rule string) *regexp.Regexp {
 	return regexp.MustCompile("^/?" + strings.Replace(regexp.QuoteMeta(strings.TrimLeft(rule, "/")), "\\*", "*", -1))
 }
 
+// parseDisallowRules transforms a slice of Disallow rule patterns into regexp.Regexps.
 func parseDisallowRules(rules []string) (regexpRules []*regexp.Regexp) {
 	regexpRules = make([]*regexp.Regexp, 0)
 	for _, rule := range rules {
@@ -302,16 +346,8 @@ func parseDisallowRules(rules []string) (regexpRules []*regexp.Regexp) {
 	return
 }
 
-func process(client *http.Client, task Task) Page {
-	resp, err := client.Get(task.URL.String())
-	if err != nil {
-		return ErrorPage(task.URL, task.Depth, err)
-	}
-
-	defer resp.Body.Close()
-	return parsePage(task.URL, task.Depth, resp)
-}
-
+// parsePage extracts all of the information from the page that we need to
+// perform all of the business logic of the application.
 func parsePage(pageUrl *url.URL, depth uint16, resp *http.Response) Page {
 	if resp.StatusCode != 200 {
 		logger.Debug("Not processing non-200 status code", "url", pageUrl, "status", resp.StatusCode)
@@ -336,6 +372,7 @@ func parsePage(pageUrl *url.URL, depth uint16, resp *http.Response) Page {
 
 var baseRegex = regexp.MustCompile("(?is)<base[^>]+href=[\"']?(.+?)['\"\\s>]")
 
+// parseBase returns the URL which all relative URLs of the given page should be considered relative to.
 func parseBase(resp *http.Response, body []byte) *url.URL {
 	base := baseRegex.FindSubmatch(body)
 	if base != nil {
@@ -352,6 +389,7 @@ func parseBase(resp *http.Response, body []byte) *url.URL {
 // Attribution: definitely not http://stackoverflow.com/a/1732454/123600.
 var anchorRegex = regexp.MustCompile("(?is)<a[^>]+href=[\"']?(.+?)['\"\\s>]")
 
+// parseLinks returns all of the anchor links on the given page.
 func parseLinks(base *url.URL, body []byte, depth uint16) (links []*Link) {
 	n := bytes.IndexByte(body, 0)
 	for _, anchor := range anchorRegex.FindAllSubmatch(body, n) {
