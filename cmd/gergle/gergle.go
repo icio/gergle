@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,7 +58,7 @@ func main() {
 	cmd.Flags().Uint16VarP(&numWorkers, "workers", "w", 10, "Number of concurrent http-getting workers.")
 	cmd.Flags().IntVarP(&numConns, "connections", "c", 5, "Maximum number of open connections to the server.")
 	cmd.Flags().BoolVarP(&zeroBothers, "zero", "", false, "The number of bothers given about robots.txt. ")
-	cmd.Flags().Float64VarP(&delay, "delay", "t", 0, "The number of seconds between requests to the server.")
+	cmd.Flags().Float64VarP(&delay, "delay", "t", -1, "The number of seconds between requests to the server.")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Configure logging.
@@ -94,14 +95,22 @@ func main() {
 			robots, err := fetchRobots(client, initUrl)
 			if err == nil {
 				disallow = append(disallow, readDisallowRules(robots)...)
+				if delay < 0 {
+					delay = readCrawlDelay(robots)
+				}
 			} else {
 				logger.Info("Failed to fetch robots.txt", "error", err)
 			}
 		}
 
+		delayDuration := time.Duration(0)
+		if delay >= 0 {
+			delayDuration = time.Duration(delay * 1e9)
+		}
+
 		// Crawling.
 		pages := make(chan Page, 10)
-		go crawl(client, initUrl, pages, maxDepth, parseDisallowRules(disallow), numWorkers, time.Duration(delay*1e9))
+		go crawl(client, initUrl, pages, maxDepth, parseDisallowRules(disallow), numWorkers, delayDuration)
 
 		// Output.
 		for page := range pages {
@@ -141,6 +150,20 @@ func readDisallowRules(body []byte) (rules []string) {
 		rules = append(rules, string(rule[1]))
 	}
 	return
+}
+
+var crawlDelayRegex = regexp.MustCompile("(?si)\\s*Crawl-Delay:\\s*([\\d\\.]+)")
+
+func readCrawlDelay(body []byte) float64 {
+	delayMatch := crawlDelayRegex.FindSubmatch(body)
+	if delayMatch == nil {
+		return 0
+	}
+	delay, err := strconv.ParseFloat(string(delayMatch[1]), 64)
+	if err != nil {
+		return 0
+	}
+	return delay
 }
 
 func sanitizeURL(u *url.URL) string {
