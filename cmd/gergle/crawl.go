@@ -79,8 +79,5 @@ func crawl(
 
 	// Tie eveything off so that we exit clearly.
 	unexplored.Wait()
-	if ticker != nil {
-		ticker.Stop()
-	}
-	close(out)
+	close(pending)
 }

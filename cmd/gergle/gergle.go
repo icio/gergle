@@ -94,7 +94,13 @@ func main() {
 
 		// Crawling.
 		pages := make(chan Page, 10)
-		go crawl(fetcher, initUrl, pages, follower, ticker)
+		go func() {
+			crawl(fetcher, initUrl, pages, follower, ticker)
+			close(pages)
+			if ticker != nil {
+				ticker.Stop()
+			}
+		}()
 
 		// Output.
 		for page := range pages {
