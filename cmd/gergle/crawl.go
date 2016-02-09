@@ -8,31 +8,31 @@ import (
 )
 
 type Fetcher interface {
-	Fetch(Task) Page
+	Fetch(*Task) Page
 }
 
 type HTTPFetcher struct {
 	Client *http.Client
-	Parser func(url *url.URL, depth uint16, resp *http.Response) Page
+	Parser ResponsePageParser
 }
 
-func NewHTTPFetcher(maxConn int) *HTTPFetcher {
+func NewHTTPFetcher(parser ResponsePageParser, maxConn int) *HTTPFetcher {
 	return &HTTPFetcher{
+		Parser: parser,
 		Client: &http.Client{Transport: &http.Transport{
 			MaxIdleConnsPerHost: maxConn,
 		}},
-		Parser: parsePage,
 	}
 }
 
-func (h *HTTPFetcher) Fetch(task Task) Page {
+func (h *HTTPFetcher) Fetch(task *Task) Page {
 	resp, err := h.Client.Get(task.URL.String())
 	if err != nil {
 		return ErrorPage(task.URL, task.Depth, err)
 	}
 
 	defer resp.Body.Close()
-	return h.Parser(task.URL, task.Depth, resp)
+	return h.Parser.Parse(task, resp)
 }
 
 // crawl is the website-crawling loop. It fetches URLs, discovers more, and
@@ -61,7 +61,7 @@ func crawl(
 					<-ticker.C
 				}
 
-				page := fetcher.Fetch(task)
+				page := fetcher.Fetch(&task)
 				out <- page
 
 				for _, link := range page.Links {

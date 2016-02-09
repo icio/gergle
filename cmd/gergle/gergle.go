@@ -64,7 +64,7 @@ func main() {
 		}
 
 		// Prepare the HTTP Client with a series of connections.
-		fetcher := NewHTTPFetcher(numConns)
+		fetcher := NewHTTPFetcher(&RegexPageParser{}, numConns)
 
 		if !zeroBothers {
 			// Be a good citizen: fetch the target's preferred defaults.
