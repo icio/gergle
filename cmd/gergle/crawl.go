@@ -41,16 +41,9 @@ func (h *HTTPFetcher) Fetch(task Task) Page {
 // more testable chunks. But later, when it's not 1am.
 func crawl(
 	fetcher Fetcher, initUrl *url.URL, out chan<- Page,
-	follower Follower, delay time.Duration,
+	follower Follower, ticker *time.Ticker,
 ) {
-	logger.Info(
-		"Starting crawl", "url", initUrl, "delay", delay,
-	)
-
-	var ticker *time.Ticker
-	if delay > 0 {
-		ticker = time.NewTicker(delay)
-	}
+	logger.Info("Starting crawl", "url", initUrl)
 
 	unexplored := sync.WaitGroup{}
 	unexplored.Add(1)

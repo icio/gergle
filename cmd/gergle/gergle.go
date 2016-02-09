@@ -79,9 +79,10 @@ func main() {
 			}
 		}
 
-		delayDuration := time.Duration(0)
+		// Rate-limiting.
+		var ticker *time.Ticker
 		if delay > 0 {
-			delayDuration = time.Duration(delay * 1e9)
+			ticker = time.NewTicker(time.Duration(delay * 1e9))
 		}
 
 		follower := UnanimousFollower{
@@ -93,7 +94,7 @@ func main() {
 
 		// Crawling.
 		pages := make(chan Page, 10)
-		go crawl(fetcher, initUrl, pages, follower, delayDuration)
+		go crawl(fetcher, initUrl, pages, follower, ticker)
 
 		// Output.
 		for page := range pages {
