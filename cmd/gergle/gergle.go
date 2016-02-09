@@ -64,13 +64,11 @@ func main() {
 		}
 
 		// Prepare the HTTP Client with a series of connections.
-		client := &http.Client{Transport: &http.Transport{
-			MaxIdleConnsPerHost: numConns,
-		}}
+		fetcher := NewHTTPFetcher(numConns)
 
 		if !zeroBothers {
 			// Be a good citizen: fetch the target's preferred defaults.
-			robots, err := fetchRobots(client, initUrl)
+			robots, err := fetchRobots(fetcher.Client, initUrl)
 			if err == nil {
 				disallow = append(disallow, readDisallowRules(robots)...)
 				if delay < 0 {
@@ -95,7 +93,7 @@ func main() {
 
 		// Crawling.
 		pages := make(chan Page, 10)
-		go crawl(client, initUrl, pages, follower, delayDuration)
+		go crawl(fetcher, initUrl, pages, follower, delayDuration)
 
 		// Output.
 		for page := range pages {

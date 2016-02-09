@@ -7,12 +7,40 @@ import (
 	"time"
 )
 
+type Fetcher interface {
+	Fetch(Task) Page
+}
+
+type HTTPFetcher struct {
+	Client *http.Client
+	Parser func(url *url.URL, depth uint16, resp *http.Response) Page
+}
+
+func NewHTTPFetcher(maxConn int) *HTTPFetcher {
+	return &HTTPFetcher{
+		Client: &http.Client{Transport: &http.Transport{
+			MaxIdleConnsPerHost: maxConn,
+		}},
+		Parser: parsePage,
+	}
+}
+
+func (h *HTTPFetcher) Fetch(task Task) Page {
+	resp, err := h.Client.Get(task.URL.String())
+	if err != nil {
+		return ErrorPage(task.URL, task.Depth, err)
+	}
+
+	defer resp.Body.Close()
+	return h.Parser(task.URL, task.Depth, resp)
+}
+
 // crawl is the website-crawling loop. It fetches URLs, discovers more, and
 // fetches those too, until there are no unseen pages to fetch. This is a
 // behemoth of a function which really ought to be broken down into smaller,
 // more testable chunks. But later, when it's not 1am.
 func crawl(
-	client *http.Client, initUrl *url.URL, out chan<- Page,
+	fetcher Fetcher, initUrl *url.URL, out chan<- Page,
 	follower Follower, delay time.Duration,
 ) {
 	logger.Info(
@@ -54,14 +82,7 @@ func crawl(
 					<-ticker.C
 				}
 
-				resp, err := client.Get(task.URL.String())
-				var page Page
-				if err != nil {
-					page = ErrorPage(task.URL, task.Depth, err)
-				} else {
-					page = parsePage(task.URL, task.Depth, resp)
-					resp.Body.Close()
-				}
+				page := fetcher.Fetch(task)
 				out <- page
 
 				for _, link := range page.Links {
