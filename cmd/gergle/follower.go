@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 type Follower interface {
@@ -45,12 +46,13 @@ func (s *ShallowFollower) Follow(link *Link) error {
 
 type UnseenFollower struct {
 	seen map[string]bool
+	lock sync.RWMutex
 }
 
 func NewUnseenFollower(seen ...*url.URL) *UnseenFollower {
-	follower := &UnseenFollower{make(map[string]bool, len(seen))}
+	follower := &UnseenFollower{seen: make(map[string]bool, len(seen))}
 	for _, u := range seen {
-		follower.seen[follower.sanitizeURL(u)] = true
+		follower.recordSeen(follower.sanitizeURL(u))
 	}
 	return follower
 }
@@ -70,13 +72,26 @@ func (_ *UnseenFollower) sanitizeURL(u *url.URL) string {
 	return strings.TrimRight(us, "/")
 }
 
+func (u *UnseenFollower) hasSeen(href string) bool {
+	u.lock.RLock()
+	_, seen := u.seen[href]
+	u.lock.RUnlock()
+	return seen
+}
+
+func (u *UnseenFollower) recordSeen(href string) {
+	u.lock.Lock()
+	u.seen[href] = true
+	u.lock.Unlock()
+}
+
 func (u *UnseenFollower) Follow(link *Link) error {
 	href := u.sanitizeURL(link.URL)
-	if _, seen := u.seen[href]; seen {
+	if u.hasSeen(href) {
 		return errors.New("Not following seen link")
 	}
 
-	u.seen[href] = true
+	u.recordSeen(href)
 	return nil
 }
 
