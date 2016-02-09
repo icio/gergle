@@ -13,6 +13,18 @@ type Follower interface {
 	Follow(link *Link) error
 }
 
+type AlwaysFollow struct{}
+
+func (_ *AlwaysFollow) Follow(link *Link) error {
+	return nil
+}
+
+type NeverFollow struct{}
+
+func (_ *NeverFollow) Follow(link *Link) error {
+	return errors.New("Never follow")
+}
+
 type UnanimousFollower []Follower
 
 func (all UnanimousFollower) Follow(link *Link) error {
