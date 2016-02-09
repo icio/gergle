@@ -86,9 +86,16 @@ func main() {
 			delayDuration = time.Duration(delay * 1e9)
 		}
 
+		follower := UnanimousFollower{
+			&LocalFollower{},
+			&ShallowFollower{maxDepth},
+			NewRobotsDisallowFollower(disallow...),
+			NewUnseenFollower(initUrl),
+		}
+
 		// Crawling.
 		pages := make(chan Page, 10)
-		go crawl(client, initUrl, pages, maxDepth, parseDisallowRules(disallow), delayDuration)
+		go crawl(client, initUrl, pages, follower, delayDuration)
 
 		// Output.
 		for page := range pages {
