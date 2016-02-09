@@ -58,20 +58,6 @@ func crawl(
 	// Seed the work queue.
 	pending := make(chan Task, 100)
 	pending <- Task{initUrl, 0}
-	links := make(chan *Link, 100)
-
-	// Filter the links channel onto the pending channel.
-	go func() {
-		// Forward links to the pending queue if we're interested in following.
-		for link := range links {
-			if err := follower.Follow(link); err != nil {
-				logger.Debug("Not following link", "link", link, "reason", err)
-				unexplored.Done()
-			} else {
-				pending <- LinkTask(link)
-			}
-		}
-	}()
 
 	// Request pending, and requeue discovered pages.
 	go func() {
@@ -86,8 +72,12 @@ func crawl(
 				out <- page
 
 				for _, link := range page.Links {
-					unexplored.Add(1)
-					links <- link
+					if err := follower.Follow(link); err != nil {
+						logger.Debug("Not following link", "link", link, "reason", err)
+					} else {
+						unexplored.Add(1)
+						pending <- LinkTask(link)
+					}
 				}
 				unexplored.Done()
 			}(task)
@@ -99,6 +89,5 @@ func crawl(
 	if ticker != nil {
 		ticker.Stop()
 	}
-	close(links)
 	close(out)
 }
