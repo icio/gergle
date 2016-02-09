@@ -60,16 +60,10 @@ func NewUnseenFollower(seen ...*url.URL) *UnseenFollower {
 // sanitizeURL returns a stripped-down string representation of a URL designed
 // to maximise overlap of equivalent URLs with slight variations.
 func (_ *UnseenFollower) sanitizeURL(u *url.URL) string {
-	us := u.String()
-
-	// Remove the fragment.
-	f := strings.Index(us, "#")
-	if f != -1 {
-		us = us[:f]
-	}
-
-	// Remove trailing slashes.
-	return strings.TrimRight(us, "/")
+	dupe := *u
+	dupe.Path = strings.TrimRight(dupe.Path, "/")
+	dupe.Fragment = ""
+	return dupe.String()
 }
 
 func (u *UnseenFollower) hasSeen(href string) bool {
