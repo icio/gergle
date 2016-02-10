@@ -115,7 +115,7 @@ func (r *RegexpDisallowFollower) Follow(link *Link) error {
 }
 
 func NewRobotsDisallowFollower(disallowRule ...string) *RegexpDisallowFollower {
-	follower := &RegexpDisallowFollower{make([]*regexp.Regexp, len(disallowRule))}
+	follower := &RegexpDisallowFollower{make([]*regexp.Regexp, 0)}
 
 	for _, rule := range disallowRule {
 		regexpRule, err := regexp.Compile("^/?" + strings.Replace(regexp.QuoteMeta(strings.TrimLeft(rule, "/")), "\\*", "*", -1))
