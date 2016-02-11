@@ -49,11 +49,14 @@ func AssetLink(assetType string, href string, base *url.URL, depth uint16) (*Lin
 		return nil, err
 	}
 
-	abs := base.ResolveReference(hrefUrl)
+	if base != nil {
+		hrefUrl = base.ResolveReference(hrefUrl)
+	}
+
 	return &Link{
 		Type:     assetType,
-		URL:      abs,
-		External: abs.Scheme != base.Scheme || abs.Host != base.Host,
+		URL:      hrefUrl,
+		External: hrefUrl.Scheme != base.Scheme || hrefUrl.Host != base.Host,
 		Depth:    depth,
 	}, nil
 }
