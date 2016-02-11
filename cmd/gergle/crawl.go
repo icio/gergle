@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"sync"
@@ -16,15 +17,6 @@ type HTTPFetcher struct {
 	Parser ResponsePageParser
 }
 
-func NewHTTPFetcher(parser ResponsePageParser, maxConn int) *HTTPFetcher {
-	return &HTTPFetcher{
-		Parser: parser,
-		Client: &http.Client{Transport: &http.Transport{
-			MaxIdleConnsPerHost: maxConn,
-		}},
-	}
-}
-
 func (h *HTTPFetcher) Fetch(task *Task) Page {
 	resp, err := h.Client.Get(task.URL.String())
 	if err != nil {
@@ -35,13 +27,59 @@ func (h *HTTPFetcher) Fetch(task *Task) Page {
 	return h.Parser.Parse(task, resp)
 }
 
+type Stopper interface {
+	Stop()
+}
+
+type RateLimitedFetcher struct {
+	ticker  *time.Ticker
+	fetcher Fetcher
+}
+
+func (r *RateLimitedFetcher) Fetch(task *Task) Page {
+	<-r.ticker.C
+	return r.fetcher.Fetch(task)
+}
+
+func (r *RateLimitedFetcher) Stop() {
+	r.ticker.Stop()
+}
+
+func NewRateLimitedFetcher(delay time.Duration, fetcher Fetcher) *RateLimitedFetcher {
+	return &RateLimitedFetcher{
+		ticker:  time.NewTicker(delay),
+		fetcher: fetcher,
+	}
+}
+
+type MockFetcher struct {
+	pages map[string]Page
+}
+
+func (m *MockFetcher) Fetch(task *Task) Page {
+	page, found := m.pages[task.URL.String()]
+	if found {
+		return page
+	}
+
+	// TODO: Switch for a fake 404 response?
+	return ErrorPage(task.URL, task.Depth, errors.New("Page not found"))
+}
+
+func NewMockFetcher(pages ...Page) *MockFetcher {
+	fetcher := &MockFetcher{make(map[string]Page, len(pages))}
+	for _, page := range pages {
+		fetcher.pages[page.URL.String()] = page
+	}
+	return fetcher
+}
+
 // crawl is the website-crawling loop. It fetches URLs, discovers more, and
 // fetches those too, until there are no unseen pages to fetch. This is a
 // behemoth of a function which really ought to be broken down into smaller,
 // more testable chunks. But later, when it's not 1am.
 func crawl(
-	fetcher Fetcher, initUrl *url.URL, out chan<- Page,
-	follower Follower, ticker *time.Ticker,
+	fetcher Fetcher, initUrl *url.URL, out chan<- Page, follower Follower,
 ) {
 	logger.Info("Starting crawl", "url", initUrl)
 
@@ -57,10 +95,6 @@ func crawl(
 		for task := range pending {
 			go func(task Task) {
 				logger.Debug("Starting", "url", task.URL)
-				if ticker != nil {
-					<-ticker.C
-				}
-
 				page := fetcher.Fetch(&task)
 				out <- page
 

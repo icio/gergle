@@ -64,11 +64,13 @@ func main() {
 		}
 
 		// Prepare the HTTP Client with a series of connections.
-		fetcher := NewHTTPFetcher(&RegexPageParser{}, numConns)
+		client := &http.Client{Transport: &http.Transport{
+			MaxIdleConnsPerHost: numConns,
+		}}
 
 		if !zeroBothers {
 			// Be a good citizen: fetch the target's preferred defaults.
-			robots, err := fetchRobots(fetcher.Client, initUrl)
+			robots, err := fetchRobots(client, initUrl)
 			if err == nil {
 				disallow = append(disallow, readDisallowRules(robots)...)
 				if delay < 0 {
@@ -79,26 +81,42 @@ func main() {
 			}
 		}
 
+		var fetcher Fetcher = &HTTPFetcher{client, &RegexPageParser{}}
+
 		// Rate-limiting.
-		var ticker *time.Ticker
 		if delay > 0 {
-			ticker = time.NewTicker(time.Duration(delay * 1e9))
+			duration := time.Duration(delay * 1e9)
+			fetcher = NewRateLimitedFetcher(duration, fetcher)
+			logger.Info("Using rate-limiting", "interval", duration)
 		}
 
-		follower := UnanimousFollower{
-			&LocalFollower{},
-			&ShallowFollower{maxDepth},
-			NewRobotsDisallowFollower(disallow...),
-			NewUnseenFollower(initUrl),
+		// Construct our rules for following links.
+		follower := UnanimousFollower{}
+
+		logger.Info("Ignoring external links")
+		follower = append(follower, &LocalFollower{})
+
+		if maxDepth >= 0 {
+			logger.Info("Ignoring deep links", "maxDepth", maxDepth)
+			follower = append(follower, &ShallowFollower{maxDepth})
 		}
+
+		if len(disallow) > 0 {
+			disallowFollower := NewRobotsDisallowFollower(disallow...)
+			logger.Info("Ignoring paths", "disallow", disallowFollower.Rules)
+			follower = append(follower, disallowFollower)
+		}
+
+		logger.Info("Ignoring previously seen paths")
+		follower = append(follower, NewUnseenFollower(initUrl))
 
 		// Crawling.
 		pages := make(chan Page, 10)
 		go func() {
-			crawl(fetcher, initUrl, pages, follower, ticker)
+			crawl(fetcher, initUrl, pages, follower)
 			close(pages)
-			if ticker != nil {
-				ticker.Stop()
+			if stoppable, ok := fetcher.(Stopper); ok {
+				stoppable.Stop()
 			}
 		}()
 
