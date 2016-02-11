@@ -107,5 +107,29 @@ func TestUnseenFollower(t *testing.T) {
 }
 
 func TestRegexpDisallowFollower(t *testing.T) {
-	// TODO
+	f := NewRobotsDisallowFollower("/hel.lo", "hello/*/world")
+
+	expRules := []string{
+		"^/?hel\\.lo",
+		"^/?hello/.*/world",
+	}
+	if len(f.Rules) != len(expRules) {
+		t.Errorf("Expected %d rules but found %d", len(expRules), len(f.Rules))
+	} else {
+		for i, rule := range f.Rules {
+			if rule.String() != expRules[i] {
+				t.Errorf("Expected rule %s but got %s", expRules[i], rule)
+			}
+		}
+	}
+
+	if f.Follow(&Link{URL: &url.URL{Path: "hello/asdf/world"}}) == nil {
+		t.Error("RegexpDisallowFollower should disallow.")
+	}
+	if f.Follow(&Link{URL: &url.URL{Path: "hel.lo"}}) == nil {
+		t.Error("RegexpDisallowFollower should disallow.")
+	}
+	if f.Follow(&Link{URL: &url.URL{Path: "goodbye"}}) != nil {
+		t.Error("RegexpDisallowFollower should allow.")
+	}
 }
