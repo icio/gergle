@@ -108,7 +108,7 @@ type RegexpDisallowFollower struct {
 func (r *RegexpDisallowFollower) Follow(link *Link) error {
 	for _, rule := range r.Rules {
 		if rule.MatchString(link.URL.Path) {
-			return errors.New(fmt.Sprintf("Link disallowed by rule %s", rule))
+			return fmt.Errorf("Link disallowed by rule %s", rule)
 		}
 	}
 	return nil
@@ -118,7 +118,7 @@ func NewRobotsDisallowFollower(disallowRule ...string) *RegexpDisallowFollower {
 	follower := &RegexpDisallowFollower{make([]*regexp.Regexp, 0)}
 
 	for _, rule := range disallowRule {
-		regexpRule, err := regexp.Compile("^/?" + strings.Replace(regexp.QuoteMeta(strings.TrimLeft(rule, "/")), "\\*", "*", -1))
+		regexpRule, err := regexp.Compile("^/?" + strings.Replace(regexp.QuoteMeta(strings.TrimLeft(rule, "/")), "\\*", ".*", -1))
 		if err != nil {
 			// TODO: Log that we couldn't generate the regex.
 			continue
