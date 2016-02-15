@@ -53,33 +53,37 @@ func parseDisallowRules(rules []string) (regexpRules []*regexp.Regexp) {
 	return
 }
 
-// parsePage extracts all of the information from the page that we need to
-// perform all of the business logic of the application.
-func parsePage(pageUrl *url.URL, depth uint16, resp *http.Response) Page {
+type ResponsePageParser interface {
+	Parse(*Task, *http.Response) Page
+}
+
+type RegexPageParser struct{}
+
+func (r *RegexPageParser) Parse(task *Task, resp *http.Response) Page {
 	if resp.StatusCode != 200 {
-		logger.Debug("Not processing non-200 status code", "url", pageUrl, "status", resp.StatusCode)
-		return ErrorPage(pageUrl, depth, errors.New("Non-200 response"))
+		logger.Debug("Not processing non-200 status code", "url", task.URL, "status", resp.StatusCode)
+		return ErrorPage(task.URL, task.Depth, errors.New("Non-200 response"))
 	}
 
 	mime := resp.Header.Get("Content-Type")
 	if !strings.Contains(strings.ToLower(mime), "html") {
-		logger.Debug("Doesn't look like HTML", "url", pageUrl, "content-type", mime)
-		return ErrorPage(pageUrl, depth, errors.New("Doesn't look like HTML"))
+		logger.Debug("Doesn't look like HTML", "url", task.URL, "content-type", mime)
+		return ErrorPage(task.URL, task.Depth, errors.New("Doesn't look like HTML"))
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		logger.Warn("Failed to read body", "url", pageUrl)
-		return ErrorPage(pageUrl, depth, err)
+		logger.Warn("Failed to read body", "url", task.URL)
+		return ErrorPage(task.URL, task.Depth, err)
 	}
 
-	base := parseBase(resp, body)
+	base := r.parseBase(resp, body)
 	return Page{
-		URL:       pageUrl,
+		URL:       task.URL,
 		Processed: true,
-		Depth:     depth,
-		Links:     parseLinks(base, body, depth+1),
-		Assets:    parseAssets(base, body, depth+1),
+		Depth:     task.Depth,
+		Links:     r.parseLinks(base, body, task.Depth+1),
+		Assets:    r.parseAssets(base, body, task.Depth+1),
 		Error:     nil,
 	}
 }
@@ -87,7 +91,7 @@ func parsePage(pageUrl *url.URL, depth uint16, resp *http.Response) Page {
 var baseRegex = regexp.MustCompile("(?is)<base[^>]+href=[\"']?(.+?)['\"\\s>]")
 
 // parseBase returns the URL which all relative URLs of the given page should be considered relative to.
-func parseBase(resp *http.Response, body []byte) *url.URL {
+func (r *RegexPageParser) parseBase(resp *http.Response, body []byte) *url.URL {
 	base := baseRegex.FindSubmatch(body)
 	if base != nil {
 		baseUrl, err := url.Parse(string(base[1]))
@@ -104,7 +108,7 @@ func parseBase(resp *http.Response, body []byte) *url.URL {
 var anchorRegex = regexp.MustCompile("(?is)<a[^>]+href=[\"']?(.+?)['\"\\s>]")
 
 // parseLinks returns all of the anchor links on the given page.
-func parseLinks(base *url.URL, body []byte, depth uint16) (links []*Link) {
+func (r *RegexPageParser) parseLinks(base *url.URL, body []byte, depth uint16) (links []*Link) {
 	n := bytes.IndexByte(body, 0)
 	for _, anchor := range anchorRegex.FindAllSubmatch(body, n) {
 		link, err := AnchorLink(string(anchor[1]), base, depth)
@@ -120,7 +124,7 @@ func parseLinks(base *url.URL, body []byte, depth uint16) (links []*Link) {
 
 var assetRegex = regexp.MustCompile("(?is)<(script|img|embed|audio|video|iframe)[^>]+src=[\"']?(.+?)['\"\\s>]")
 
-func parseAssets(base *url.URL, body []byte, depth uint16) (assets []*Link) {
+func (r *RegexPageParser) parseAssets(base *url.URL, body []byte, depth uint16) (assets []*Link) {
 	// TODO: Consider <link>, <object> tags.
 	n := bytes.IndexByte(body, 0)
 	for _, assetTag := range assetRegex.FindAllSubmatch(body, n) {

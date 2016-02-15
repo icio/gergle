@@ -81,14 +81,44 @@ func main() {
 			}
 		}
 
-		delayDuration := time.Duration(0)
+		var fetcher Fetcher = &HTTPFetcher{client, &RegexPageParser{}}
+
+		// Rate-limiting.
 		if delay > 0 {
-			delayDuration = time.Duration(delay * 1e9)
+			duration := time.Duration(delay * 1e9)
+			fetcher = NewRateLimitedFetcher(duration, fetcher)
+			logger.Info("Using rate-limiting", "interval", duration)
 		}
+
+		// Construct our rules for following links.
+		follower := UnanimousFollower{}
+
+		logger.Info("Ignoring external links")
+		follower = append(follower, &LocalFollower{})
+
+		if maxDepth >= 0 {
+			logger.Info("Ignoring deep links", "maxDepth", maxDepth)
+			follower = append(follower, &ShallowFollower{maxDepth})
+		}
+
+		if len(disallow) > 0 {
+			disallowFollower := NewRobotsDisallowFollower(disallow...)
+			logger.Info("Ignoring paths", "disallow", disallowFollower.Rules)
+			follower = append(follower, disallowFollower)
+		}
+
+		logger.Info("Ignoring previously seen paths")
+		follower = append(follower, NewUnseenFollower(initUrl))
 
 		// Crawling.
 		pages := make(chan Page, 10)
-		go crawl(client, initUrl, pages, maxDepth, parseDisallowRules(disallow), delayDuration)
+		go func() {
+			crawl(fetcher, initUrl, pages, follower)
+			close(pages)
+			if stoppable, ok := fetcher.(Stopper); ok {
+				stoppable.Stop()
+			}
+		}()
 
 		// Output.
 		for page := range pages {
@@ -131,58 +161,4 @@ func fetchRobots(client *http.Client, u *url.URL) ([]byte, error) {
 	}
 
 	return body, nil
-}
-
-// A pending Task for crawl workers to complete.
-type Task struct {
-	URL   *url.URL
-	Depth uint16
-}
-
-// The Task for following a Link.
-func LinkTask(link *Link) Task {
-	return Task{URL: link.URL, Depth: link.Depth}
-}
-
-// A Page the crawler has scraped and parsed.
-type Page struct {
-	URL       *url.URL
-	Processed bool
-	Depth     uint16
-	Links     []*Link
-	Assets    []*Link
-	Error     *error
-}
-
-func ErrorPage(pageURL *url.URL, depth uint16, err error) Page {
-	return Page{pageURL, false, depth, []*Link{}, []*Link{}, &err}
-}
-
-// A link on a page to another resource.
-type Link struct {
-	Type     string
-	URL      *url.URL
-	External bool
-	Depth    uint16
-}
-
-// AnchorLink returns a Link object from an <a> href, according to the base URL.
-func AnchorLink(href string, base *url.URL, depth uint16) (*Link, error) {
-	return AssetLink("anchor", href, base, depth)
-}
-
-// AssetLink returns a Link object describing a Page's dependency on another resource.
-func AssetLink(assetType string, href string, base *url.URL, depth uint16) (*Link, error) {
-	hrefUrl, err := url.Parse(href)
-	if err != nil {
-		return nil, err
-	}
-
-	abs := base.ResolveReference(hrefUrl)
-	return &Link{
-		Type:     assetType,
-		URL:      abs,
-		External: abs.Scheme != base.Scheme || abs.Host != base.Host,
-		Depth:    depth,
-	}, nil
 }
