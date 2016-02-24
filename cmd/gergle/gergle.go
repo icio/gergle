@@ -3,12 +3,13 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/spf13/cobra"
-	log "gopkg.in/inconshreveable/log15.v2"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/spf13/cobra"
+	log "gopkg.in/inconshreveable/log15.v2"
 )
 
 var logger = log.New()
@@ -17,6 +18,8 @@ func main() {
 	var maxDepth uint16
 	var disallow []string
 	var quiet bool
+	var username string
+	var password string
 	var verbose bool
 	var numConns int
 	var zeroBothers bool
@@ -30,6 +33,8 @@ func main() {
 	cmd.Flags().Uint16VarP(&maxDepth, "depth", "d", 100, "Maximum crawl depth.")
 	cmd.Flags().StringSliceVarP(&disallow, "disallow", "i", nil, "Disallowed paths.")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "No logging to stderr.")
+	cmd.Flags().StringVarP(&username, "http-user", "u", "", "HTTP authentication username.")
+	cmd.Flags().StringVarP(&password, "http-pass", "p", "", "HTTP authentication password.")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output logging.")
 	cmd.Flags().IntVarP(&numConns, "connections", "c", 5, "Maximum number of open connections to the server.")
 	cmd.Flags().BoolVarP(&zeroBothers, "zero", "", false, "The number of bothers to give about robots.txt. ")
@@ -81,7 +86,7 @@ func main() {
 			}
 		}
 
-		var fetcher Fetcher = &HTTPFetcher{client, &RegexPageParser{}}
+		var fetcher Fetcher = &HTTPFetcher{client, &RegexPageParser{}, username, password}
 
 		// Rate-limiting.
 		if delay > 0 {
