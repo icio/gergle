@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"regexp"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,6 +26,9 @@ func main() {
 	var zeroBothers bool
 	var delay float64
 	var longOutput bool
+	var baseRegex string
+	var anchorRegex string
+	var assetRegex string
 
 	cmd := &cobra.Command{
 		Use:   "gergle URL",
@@ -40,6 +44,11 @@ func main() {
 	cmd.Flags().BoolVarP(&zeroBothers, "zero", "", false, "The number of bothers to give about robots.txt. ")
 	cmd.Flags().Float64VarP(&delay, "delay", "t", -1, "The number of seconds between requests to the server.")
 	cmd.Flags().BoolVarP(&longOutput, "long", "", false, "List all of the links and assets from a page.")
+
+	// Attribution: definitely not http://stackoverflow.com/a/1732454/123600.
+	cmd.Flags().StringVar(&baseRegex, "baseRegex", "(?is)<base[^>]+href=[\"']?(.+?)['\"\\s>]", "Add all matched items to fetch queue")
+	cmd.Flags().StringVar(&anchorRegex, "anchorRegex", "(?is)<a[^>]+href=[\"']?(.+?)['\"\\s>]", "Add all matched items to fetch queue")
+	cmd.Flags().StringVar(&assetRegex, "assetRegex", "(?is)<(script|img|embed|audio|video|iframe)[^>]+src=[\"']?(.+?)['\"\\s>]", "Add all matched items to fetch queue")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Configure logging.
@@ -61,7 +70,6 @@ func main() {
 		} else if len(args) > 1 {
 			return errors.New("Unexpected arguments after URL.")
 		}
-
 		// Ensure the user has provided a valid URL.
 		initUrl, err := url.Parse(args[0])
 		if err != nil || (initUrl.Scheme != "http" && initUrl.Scheme != "https") {
@@ -86,7 +94,10 @@ func main() {
 			}
 		}
 
-		var fetcher Fetcher = &HTTPFetcher{client, &RegexPageParser{}, username, password}
+		rp := &RegexPageParser{*regexp.MustCompile(baseRegex),
+			*regexp.MustCompile(anchorRegex), *regexp.MustCompile(assetRegex)}
+
+		var fetcher Fetcher = &HTTPFetcher{client, rp, username, password}
 
 		// Rate-limiting.
 		if delay > 0 {

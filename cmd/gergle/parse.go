@@ -57,7 +57,11 @@ type ResponsePageParser interface {
 	Parse(*Task, *http.Response) Page
 }
 
-type RegexPageParser struct{}
+type RegexPageParser struct {
+	baseRegex   regexp.Regexp
+	anchorRegex regexp.Regexp
+	assetRegex  regexp.Regexp
+}
 
 func (r *RegexPageParser) Parse(task *Task, resp *http.Response) Page {
 	if resp.StatusCode != 200 {
@@ -66,9 +70,9 @@ func (r *RegexPageParser) Parse(task *Task, resp *http.Response) Page {
 	}
 
 	mime := resp.Header.Get("Content-Type")
-	if !strings.Contains(strings.ToLower(mime), "html") {
-		logger.Debug("Doesn't look like HTML", "url", task.URL, "content-type", mime)
-		return ErrorPage(task.URL, task.Depth, errors.New("Doesn't look like HTML"))
+	if strings.Split(strings.ToLower(mime), "/")[0] != "text" {
+		logger.Debug("'Content-Type' is not text/*", "url", task.URL, "content-type", mime)
+		return ErrorPage(task.URL, task.Depth, errors.New("'Content-Type' is not text/*"))
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)
@@ -88,11 +92,9 @@ func (r *RegexPageParser) Parse(task *Task, resp *http.Response) Page {
 	}
 }
 
-var baseRegex = regexp.MustCompile("(?is)<base[^>]+href=[\"']?(.+?)['\"\\s>]")
-
 // parseBase returns the URL which all relative URLs of the given page should be considered relative to.
 func (r *RegexPageParser) parseBase(resp *http.Response, body []byte) *url.URL {
-	base := baseRegex.FindSubmatch(body)
+	base := r.baseRegex.FindSubmatch(body)
 	if base != nil {
 		baseUrl, err := url.Parse(string(base[1]))
 		if err == nil {
@@ -104,13 +106,10 @@ func (r *RegexPageParser) parseBase(resp *http.Response, body []byte) *url.URL {
 	return resp.Request.URL
 }
 
-// Attribution: definitely not http://stackoverflow.com/a/1732454/123600.
-var anchorRegex = regexp.MustCompile("(?is)<a[^>]+href=[\"']?(.+?)['\"\\s>]")
-
 // parseLinks returns all of the anchor links on the given page.
 func (r *RegexPageParser) parseLinks(base *url.URL, body []byte, depth uint16) (links []*Link) {
 	n := bytes.IndexByte(body, 0)
-	for _, anchor := range anchorRegex.FindAllSubmatch(body, n) {
+	for _, anchor := range r.anchorRegex.FindAllSubmatch(body, n) {
 		link, err := AnchorLink(string(anchor[1]), base, depth)
 		if err != nil {
 			logger.Debug("Failed to parse href", "href", anchor[1])
@@ -122,12 +121,10 @@ func (r *RegexPageParser) parseLinks(base *url.URL, body []byte, depth uint16) (
 	return
 }
 
-var assetRegex = regexp.MustCompile("(?is)<(script|img|embed|audio|video|iframe)[^>]+src=[\"']?(.+?)['\"\\s>]")
-
 func (r *RegexPageParser) parseAssets(base *url.URL, body []byte, depth uint16) (assets []*Link) {
 	// TODO: Consider <link>, <object> tags.
 	n := bytes.IndexByte(body, 0)
-	for _, assetTag := range assetRegex.FindAllSubmatch(body, n) {
+	for _, assetTag := range r.assetRegex.FindAllSubmatch(body, n) {
 		asset, err := AssetLink(string(assetTag[1]), string(assetTag[2]), base, depth)
 		if err != nil {
 			logger.Debug("Failed to parse asset source", "src", assetTag[2])
