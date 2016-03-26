@@ -3,12 +3,14 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/spf13/cobra"
-	log "gopkg.in/inconshreveable/log15.v2"
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"regexp"
 	"time"
+
+	"github.com/spf13/cobra"
+	log "gopkg.in/inconshreveable/log15.v2"
 )
 
 var logger = log.New()
@@ -17,11 +19,16 @@ func main() {
 	var maxDepth uint16
 	var disallow []string
 	var quiet bool
+	var username string
+	var password string
 	var verbose bool
 	var numConns int
 	var zeroBothers bool
 	var delay float64
 	var longOutput bool
+	var baseRegex string
+	var anchorRegex string
+	var assetRegex string
 
 	cmd := &cobra.Command{
 		Use:   "gergle URL",
@@ -30,11 +37,18 @@ func main() {
 	cmd.Flags().Uint16VarP(&maxDepth, "depth", "d", 100, "Maximum crawl depth.")
 	cmd.Flags().StringSliceVarP(&disallow, "disallow", "i", nil, "Disallowed paths.")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "No logging to stderr.")
+	cmd.Flags().StringVarP(&username, "http-user", "u", "", "HTTP authentication username.")
+	cmd.Flags().StringVarP(&password, "http-pass", "p", "", "HTTP authentication password.")
 	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Verbose output logging.")
 	cmd.Flags().IntVarP(&numConns, "connections", "c", 5, "Maximum number of open connections to the server.")
 	cmd.Flags().BoolVarP(&zeroBothers, "zero", "", false, "The number of bothers to give about robots.txt. ")
 	cmd.Flags().Float64VarP(&delay, "delay", "t", -1, "The number of seconds between requests to the server.")
 	cmd.Flags().BoolVarP(&longOutput, "long", "", false, "List all of the links and assets from a page.")
+
+	// Attribution: definitely not http://stackoverflow.com/a/1732454/123600.
+	cmd.Flags().StringVar(&baseRegex, "baseRegex", "(?is)<base[^>]+href=[\"']?(.+?)['\"\\s>]", "Add all matched items to fetch queue")
+	cmd.Flags().StringVar(&anchorRegex, "anchorRegex", "(?is)<a[^>]+href=[\"']?(.+?)['\"\\s>]", "Add all matched items to fetch queue")
+	cmd.Flags().StringVar(&assetRegex, "assetRegex", "(?is)<(script|img|embed|audio|video|iframe)[^>]+src=[\"']?(.+?)['\"\\s>]", "Add all matched items to fetch queue")
 
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		// Configure logging.
@@ -56,7 +70,6 @@ func main() {
 		} else if len(args) > 1 {
 			return errors.New("Unexpected arguments after URL.")
 		}
-
 		// Ensure the user has provided a valid URL.
 		initUrl, err := url.Parse(args[0])
 		if err != nil || (initUrl.Scheme != "http" && initUrl.Scheme != "https") {
@@ -81,7 +94,10 @@ func main() {
 			}
 		}
 
-		var fetcher Fetcher = &HTTPFetcher{client, &RegexPageParser{}}
+		rp := &RegexPageParser{*regexp.MustCompile(baseRegex),
+			*regexp.MustCompile(anchorRegex), *regexp.MustCompile(assetRegex)}
+
+		var fetcher Fetcher = &HTTPFetcher{client, rp, username, password}
 
 		// Rate-limiting.
 		if delay > 0 {

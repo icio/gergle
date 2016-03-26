@@ -11,12 +11,20 @@ type Fetcher interface {
 }
 
 type HTTPFetcher struct {
-	Client *http.Client
-	Parser ResponsePageParser
+	Client   *http.Client
+	Parser   ResponsePageParser
+	Username string
+	Password string
 }
 
 func (h *HTTPFetcher) Fetch(task *Task) Page {
-	resp, err := h.Client.Get(task.URL.String())
+	req, err := http.NewRequest("GET", task.URL.String(), nil)
+
+	if h.Username != "" || h.Password != "" {
+		req.SetBasicAuth(h.Username, h.Password)
+	}
+
+	resp, err := h.Client.Do(req)
 	if err != nil {
 		return ErrorPage(task.URL, task.Depth, err)
 	}
